@@ -2290,6 +2290,9 @@ body.admin-page {
 }
 
 .admin-bar-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font: inherit;
   font-size: .82rem;
   color: var(--ink-soft);
@@ -2482,7 +2485,7 @@ body.admin-page {
   border-radius: var(--r-full);
   background: var(--bg);
   color: var(--ink);
-  min-width: 230px;
+  min-width: min(275px, 100%);
 }
 .admin-search:focus-visible { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(176, 140, 74, .16); }
 
@@ -2628,6 +2631,9 @@ body.admin-page {
 }
 .admin-field input[type="text"],
 .admin-field input[type="email"],
+.admin-field input[type="tel"],
+.admin-field input[type="url"],
+.admin-field input[type="search"],
 .admin-field input[type="password"],
 .admin-field input[type="number"],
 .admin-field select,
@@ -2764,8 +2770,9 @@ body.admin-page {
 .qv-availability { color: var(--gold-deep); font-size: .85rem; margin-top: 12px; }
 
 /* Google sign-in */
-.google-btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 48px; background: #fff; color: #1f1f1f; border: 1px solid #dadce0; border-radius: 999px; font-weight: 600; cursor: pointer; }
+.google-btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 48px; background: #fff; color: #1f1f1f; border: 1px solid #dadce0; border-radius: 999px; font: inherit; font-size: .92rem; font-weight: 600; cursor: pointer; }
 .google-btn:hover { background: #f7f8f8; }
+.google-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .google-btn:disabled { opacity: .6; cursor: wait; }
 .auth-divider { display: flex; align-items: center; gap: 12px; margin: 18px 0; font-size: .82rem; color: #8a8175; text-transform: uppercase; letter-spacing: .08em; }
 .auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: currentColor; opacity: .3; }

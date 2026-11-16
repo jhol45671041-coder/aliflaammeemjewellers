@@ -29,8 +29,11 @@ test('stock validation accepts empty optional money and normalizes SKU', () => {
   assert.equal(result.value.sku, 'ALM-001');
   assert.equal(result.value.price, null);
 });
-test('stock validation rejects negative and fractional quantities', () => {
+test('stock validation rejects negative, blank and fractional quantities', () => {
   assert.match(validateStock({ ...stock, stock_quantity: -1 }).error, /Quantity/);
+  assert.match(validateStock({ ...stock, stock_quantity: '' }).error, /Quantity/);
+  assert.match(validateStock({ ...stock, stock_quantity: '   ' }).error, /Quantity/);
+  assert.match(validateStock({ ...stock, low_stock_threshold: '' }).error, /Low-stock alert/);
   assert.match(validateStock({ ...stock, stock_quantity: 1.5 }).error, /whole number/);
 });
 

@@ -34,7 +34,9 @@ export function stockLevel(piece) {
 }
 
 function nonnegative(value, label, integer = false, nullable = false) {
-  if (nullable && String(value ?? '').trim() === '') return { value: null };
+  if (String(value ?? '').trim() === '') {
+    return nullable ? { value: null } : { error: `${label} must be a non-negative ${integer ? 'whole number' : 'number'} up to 1,000,000,000.` };
+  }
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0 || (integer && !Number.isInteger(number)) || number > 1000000000) {
     return { error: `${label} must be a non-negative ${integer ? 'whole number' : 'number'} up to 1,000,000,000.` };

@@ -4,7 +4,7 @@
 import { createClient } from './vendor/supabase.js';
 import { SUPABASE_URL, SUPABASE_ANON_KEY, ADMIN_EMAILS } from './supabase-config.js';
 import { $, el, clear, field, input, textarea, select, formError, saving, toast,
-  openModal, confirmModal, detailRow, download, formatDate, formatDateTime, ago,
+  openModal, closeActiveModal, confirmModal, detailRow, download, formatDate, formatDateTime, ago,
   isMissingRelation, databaseError, missingCard, errorCard, statusPill } from './admin-ui.js';
 import { money, stockLevel, validateStock, slugify, safeImage, toCsv, samplePosts } from './admin-model.js';
 import { renderCustomers, renderPosts, openCustomerEditor, openPostEditor } from './admin-records.js';
@@ -23,6 +23,7 @@ const TYPES = { rings: 'Rings', necklace: 'Necklaces', earrings: 'Earrings', ban
 const OCCASIONS = { bridal: 'Bridal', engagement: 'Engagement', festive: 'Festive', everyday: 'Everyday', gifting: 'Gifting', investment: 'Investment' };
 const MOTIFS = ['rings', 'necklace', 'pendants', 'earrings', 'bangles', 'bridal'];
 const STATUSES = ['new', 'confirmed', 'completed', 'cancelled'];
+const APPT_TONES = { new: 'warning', confirmed: 'success', completed: 'neutral', cancelled: 'danger' };
 const SAMPLE_KEY = 'alm-admin-preview-v1';
 const HEADINGS = {
   overview: ['Overview', 'A little clarity for your everyday. Your shop, at a glance.'],
@@ -85,24 +86,6 @@ async function afterAuth(user) {
   await refresh();
 }
 
-$('#signInForm')?.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const email = $('#adminEmail').value.trim(), password = $('#adminPassword').value;
-  if (!email || !password) { authMessage('Enter your email address and password.'); return; }
-  authMessage('');
-  await saving($('#signInBtn'), 'Signing in…', async () => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error || !data.user) {
-      authMessage(/invalid login/i.test(error?.message || '')
-        ? 'Those details do not match an account. Check your email and password, and confirm your email if you have just signed up.'
-        : error?.message || 'We could not sign you in. Please try again.');
-      return;
-    }
-    $('#adminPassword').value = '';
-    await afterAuth(data.user);
-  });
-});
-
 $('#googleSignInBtn').addEventListener('click', async () => {
   authMessage('');
   const button = $('#googleSignInBtn');
@@ -113,8 +96,16 @@ $('#googleSignInBtn').addEventListener('click', async () => {
   });
   if (error) { authMessage(error.message || 'Google sign-in is not available right now.'); button.disabled = false; }
 });
+window.addEventListener('pageshow', () => {
+  const button = $('#googleSignInBtn');
+  if (button) button.disabled = false;
+});
+
+let booted = false;
+let manualSignOut = false;
 
 function resetPrivateState() {
+  closeActiveModal();
   state.user = null; state.isAdmin = false; state.sample = false; state.adminSource = null;
   state.appointments = []; state.pieces = []; state.customers = []; state.profiles = []; state.posts = []; state.reviews = [];
   state.ready = {}; state.errors = {}; state.tab = 'overview';
@@ -125,13 +116,29 @@ function resetPrivateState() {
 
 $('#signOutBtn').addEventListener('click', async () => {
   const wasSample = state.sample;
+  manualSignOut = true;
   sessionStorage.removeItem(SAMPLE_KEY);
   resetPrivateState();
   showView('auth');
   if (!wasSample) {
     try { await supabase.auth.signOut(); } catch { /* Local session is already cleared. */ }
   }
+  manualSignOut = false;
   $('#useSampleBtn').focus();
+});
+
+supabase.auth.onAuthStateChange((event, session) => {
+  if (!booted || state.sample) return;
+  if (event === 'TOKEN_REFRESHED' && session?.user) {
+    state.user = session.user;
+    return;
+  }
+  if (event === 'SIGNED_OUT' && state.user) {
+    const showNotice = !manualSignOut;
+    resetPrivateState();
+    showView('auth');
+    if (showNotice) authMessage('Your session ended. Sign in again to continue.');
+  }
 });
 
 /* -------------------------- Isolated preview -------------------------- */
@@ -145,15 +152,18 @@ async function samplePieces() {
     }
   } catch { /* The small fallback below also works without a catalogue fetch. */ }
   if (!items.length) items = [{ id: 'meher', name: 'Meher Solitaire Ring', type: 'rings', occasion: 'engagement', motif: 'rings', desc: 'A brilliant-cut solitaire on a hand-forged 21K gold band.', story: 'Set in a six-claw mount so light reaches the stone from every angle.', photo: 'assets/products/meher.webp', tags: ['BIS Hallmarked'], specs: [['Metal', '21K yellow gold']] }];
-  return items.map((item, index) => ({
-    id: item.id, name: item.name, type: item.type, occasion: item.occasion, motif: item.motif,
-    badge: item.badge || '', metals: ['gold21'], tags: item.tags || [], description: item.desc,
-    story: item.story, specs: item.specs || [], photo: item.photo, sort_order: index,
-    visible: true, featured: index < 3, sku: 'ALM-' + String(index + 1).padStart(4, '0'),
-    track_stock: true, stock_quantity: [4, 2, 1, 0, 3, 6][index % 6], low_stock_threshold: 2,
-    price: 185000 + index * 17500, cost_price: 151000 + index * 14000,
-    weight_grams: 8.5 + index, location: index % 2 ? 'Display B' : 'Display A', updated_at: new Date().toISOString()
-  }));
+  return items.map((item, index) => {
+    const stock_quantity = [4, 2, 1, 0, 3, 6][index % 6];
+    return {
+      id: item.id, name: item.name, type: item.type, occasion: item.occasion, motif: item.motif,
+      badge: item.badge || '', metals: ['gold21'], tags: item.tags || [], description: item.desc,
+      story: item.story, specs: item.specs || [], photo: item.photo, sort_order: index,
+      visible: true, featured: index < 3, sku: 'ALM-' + String(index + 1).padStart(4, '0'),
+      track_stock: true, stock_quantity, low_stock_threshold: 2, in_stock: stock_quantity > 0,
+      price: 185000 + index * 17500, cost_price: 151000 + index * 14000,
+      weight_grams: 8.5 + index, location: index % 2 ? 'Display B' : 'Display A', updated_at: new Date().toISOString()
+    };
+  });
 }
 
 function persistSample() {
@@ -304,27 +314,33 @@ function statCard(label, value, note) {
 function renderOverview() {
   const panel = $('#panelOverview');
   clear(panel);
+  const ok = (name) => state.ready[name] === 'ok' || state.ready[name] === 'sample';
+  const countLabel = (n, singular, plural = singular + 's') => n + ' ' + (n === 1 ? singular : plural);
   const low = state.pieces.filter((piece) => ['low', 'out'].includes(stockLevel(piece).key));
-  const units = state.pieces.filter((piece) => piece.track_stock).reduce((sum, piece) => sum + piece.stock_quantity, 0);
+  const tracked = state.pieces.filter((piece) => piece.track_stock);
+  const units = tracked.reduce((sum, piece) => sum + piece.stock_quantity, 0);
   const published = state.posts.filter((post) => post.status === 'published').length;
+  const newRequests = state.appointments.filter((row) => row.status === 'new').length;
+  const drafts = state.posts.length - published;
+  const visiblePieces = state.pieces.filter((piece) => piece.visible).length;
   panel.append(el('div', { class: 'admin-quick-actions' }, [
     el('button', { class: 'admin-btn admin-btn-primary', type: 'button', onclick: () => editPiece(null) }, ['+ Add stock']),
     el('button', { class: 'admin-btn', type: 'button', onclick: () => openCustomerEditor(ctx) }, ['+ Add customer']),
     el('button', { class: 'admin-btn', type: 'button', onclick: () => openPostEditor(ctx) }, ['+ Write a post'])
   ]));
   panel.append(el('div', { class: 'admin-stats' }, [
-    statCard('Units in stock', units, state.pieces.filter((piece) => piece.track_stock).length + ' tracked pieces'),
-    statCard('Low / out of stock', low.length, 'pieces need attention'),
-    statCard('Customer records', state.customers.length, state.profiles.length + ' website accounts'),
-    statCard('New requests', state.appointments.filter((row) => row.status === 'new').length, 'awaiting a reply'),
-    statCard('Published posts', published, state.posts.length - published + ' drafts'),
-    statCard('Catalogue pieces', state.pieces.length, state.pieces.filter((piece) => piece.visible).length + ' visible on the website')
+    statCard('Units in stock', ok('pieces') ? units : '—', ok('pieces') ? countLabel(tracked.length, 'tracked piece') : 'Stock unavailable'),
+    statCard('Low / out of stock', ok('pieces') ? low.length : '—', ok('pieces') ? (low.length === 1 ? 'piece needs attention' : 'pieces need attention') : 'Stock unavailable'),
+    statCard('Customer records', ok('customers') ? state.customers.length : '—', ok('profiles') ? countLabel(state.profiles.length, 'website account') : 'Accounts unavailable'),
+    statCard('New requests', ok('appointments') ? newRequests : '—', ok('appointments') ? 'awaiting a reply' : 'Appointments unavailable'),
+    statCard('Published posts', ok('posts') ? published : '—', ok('posts') ? countLabel(drafts, 'draft') : 'Posts unavailable'),
+    statCard('Catalogue pieces', ok('pieces') ? state.pieces.length : '—', ok('pieces') ? visiblePieces + ' visible on the website' : 'Catalogue unavailable')
   ]));
   const lowCard = el('section', { class: 'admin-card' }, [
     el('div', { class: 'admin-card-head' }, [el('h2', { class: 'admin-card-title', text: 'Stock needing attention' }),
       el('button', { class: 'admin-btn admin-btn-small admin-btn-quiet', type: 'button', onclick: () => { state.stockFilter = 'low'; navigate('catalogue'); } }, ['View stock'])])
   ]);
-  if (state.ready.pieces === 'missing' || state.ready.pieces === 'error') lowCard.append(el('p', { class: 'admin-empty', text: 'Connect the database to see your stock alerts.' }));
+  if (!ok('pieces')) lowCard.append(el('p', { class: 'admin-empty', text: 'Connect the database to see your stock alerts.' }));
   else if (!low.length) lowCard.append(el('p', { class: 'admin-empty', text: 'All tracked pieces are above their low-stock threshold.' }));
   else {
     const list = el('ul', { class: 'admin-list' });
@@ -340,12 +356,13 @@ function renderOverview() {
     el('div', { class: 'admin-card-head' }, [el('h2', { class: 'admin-card-title', text: 'Upcoming appointments' }),
       el('button', { class: 'admin-btn admin-btn-small admin-btn-quiet', type: 'button', onclick: () => navigate('appointments') }, ['View all'])])
   ]);
-  if (!upcoming.length) apptCard.append(el('p', { class: 'admin-empty', text: 'Nothing waiting. New website requests will appear here.' }));
+  if (!ok('appointments')) apptCard.append(el('p', { class: 'admin-empty', text: 'Connect the database to see your appointment requests.' }));
+  else if (!upcoming.length) apptCard.append(el('p', { class: 'admin-empty', text: 'Nothing waiting. New website requests will appear here.' }));
   else {
     const list = el('ul', { class: 'admin-list' });
     upcoming.forEach((row) => list.append(el('li', { class: 'admin-list-row' }, [
-      el('div', { class: 'admin-list-main' }, [el('p', { class: 'admin-list-title', text: row.name }), el('p', { class: 'admin-list-sub', text: formatDate(row.preferred_date) + ' · ' + (row.preferred_time || '') })]),
-      statusPill(row.status), el('button', { class: 'admin-btn admin-btn-small', type: 'button', onclick: () => openAppointment(row) }, ['Open'])
+      el('div', { class: 'admin-list-main' }, [el('p', { class: 'admin-list-title', text: row.name }), el('p', { class: 'admin-list-sub', text: formatDate(row.preferred_date) + (row.preferred_time ? ' · ' + row.preferred_time : '') })]),
+      statusPill(row.status, row.status, APPT_TONES[row.status]), el('button', { class: 'admin-btn admin-btn-small', type: 'button', onclick: () => openAppointment(row) }, ['Open'])
     ])));
     apptCard.append(list);
   }
@@ -449,7 +466,7 @@ function editPiece(piece) {
   const price = input(record.price, { type: 'number', min: 0, step: '0.01', placeholder: 'PKR' });
   const cost = input(record.cost_price, { type: 'number', min: 0, step: '0.01', placeholder: 'Private · PKR' });
   const weight = input(record.weight_grams, { type: 'number', min: 0, step: '0.001', placeholder: 'Grams' });
-  const form = el('form', { class: 'admin-form', novalidate: true }, [
+  const form = el('form', { id: 'admin-piece-form', class: 'admin-form', novalidate: true }, [
     formSection('Piece details', [field('Name *', name), field('URL ID', id, isNew ? 'Generated from the name. Fixed after saving.' : 'Fixed so existing links keep working.'), field('Type', type), field('Occasion', occasion), field('Badge', badge), field('Fallback illustration', motif), field('Short description', description), field('Story', story), field('Tags', tags, 'Separate with commas.'), field('Photograph', photo, 'HTTPS URL or assets/ path. Leave blank for the illustration.'), field('Specifications', specs, 'One per line, as Label: value.'), field('Sort order', sort, 'Lower numbers appear first.')]),
     formSection('Inventory · private to admins', [field('SKU', sku), field('Storage location', location), field('Selling price (PKR)', price), field('Cost price (PKR)', cost), field('Weight (grams)', weight), field('Low-stock alert at', threshold)]),
     el('label', { class: 'admin-check admin-tracking-check' }, [track, el('span', { text: 'Track stock quantity for this piece' })]),
@@ -460,16 +477,18 @@ function editPiece(piece) {
       el('label', { class: 'admin-check' }, [featured, el('span', { text: 'Feature on home page' })])
     ])
   ]);
-  const saveButton = el('button', { class: 'admin-btn admin-btn-primary', type: 'button', onclick: () => form.requestSubmit() }, [isNew ? 'Add piece' : 'Save changes']);
+  const saveButton = el('button', { class: 'admin-btn admin-btn-primary', type: 'submit', form: 'admin-piece-form' }, [isNew ? 'Add piece' : 'Save changes']);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    formError(form, '');
     const result = validateStock({ id: id.value, name: name.value, photo: photo.value, sku: sku.value, location: location.value,
       track_stock: track.checked, stock_quantity: quantity.value, low_stock_threshold: threshold.value,
       price: price.value, cost_price: cost.value, weight_grams: weight.value });
     if (result.error) { formError(form, result.error); return; }
     if (!metal.checked) { formError(form, 'Select 21K gold as the metal.'); return; }
-    const order = Number(sort.value);
-    if (!Number.isInteger(order) || order < 0 || order > 1000000) { formError(form, 'Sort order must be a whole number from 0 to 1,000,000.'); return; }
+    const rawSort = String(sort.value ?? '').trim();
+    const order = Number(rawSort);
+    if (!rawSort || !Number.isInteger(order) || order < 0 || order > 1000000) { formError(form, 'Sort order must be a whole number from 0 to 1,000,000.'); return; }
     const pairs = [];
     for (const line of specs.value.split('\n').filter((line) => line.trim())) {
       const colon = line.indexOf(':');
@@ -483,7 +502,8 @@ function editPiece(piece) {
       sort_order: order, visible: visible.checked, featured: featured.checked };
     saving(saveButton, 'Saving…', async () => {
       if (state.sample) {
-        if (piece) Object.assign(piece, row); else state.pieces.push(row);
+        const sampleRow = { ...row, in_stock: !row.track_stock || row.stock_quantity > 0 };
+        if (piece) Object.assign(piece, sampleRow); else state.pieces.push(sampleRow);
       } else {
         const { error } = await (isNew ? supabase.from('pieces').insert(row) : supabase.from('pieces').update(row).eq('id', piece.id));
         if (error) { formError(form, databaseError(error)); return; }
@@ -499,26 +519,36 @@ function editPiece(piece) {
 
 function previewPiece(piece) {
   const photo = safeImage(piece.photo);
+  const unavailable = piece.in_stock === false || (piece.track_stock && Number(piece.stock_quantity || 0) <= 0);
   openModal('Catalogue preview', el('article', { class: 'admin-product-preview' }, [
     el('p', { class: 'admin-notice', text: 'Sample preview · not published to your live website.' }),
     photo ? el('img', { src: photo, alt: piece.name, onerror: (event) => { event.target.hidden = true; } }) : null,
     el('p', { class: 'journal-category', text: TYPES[piece.type] || piece.type }), el('h2', { text: piece.name }),
     el('p', { text: piece.description || '' }), el('p', { text: piece.story || '' }),
-    statusPill(piece.in_stock === false ? 'out' : 'in', piece.track_stock && piece.stock_quantity === 0 ? 'Currently unavailable' : 'Ask us about availability')
+    statusPill(unavailable ? 'out' : 'in', unavailable ? 'Currently unavailable' : 'Ask us about availability', unavailable ? 'danger' : 'success')
   ]));
 }
 
 async function updatePieceFields(piece, values, message, control) {
-  if (control) control.disabled = true;
+  const group = control?.closest?.('.admin-quantity');
+  const controls = group ? [...group.querySelectorAll('button')] : control ? [control] : [];
+  controls.forEach((node) => { node.disabled = true; });
   try {
     if (!state.sample) {
       const { error } = await supabase.from('pieces').update(values).eq('id', piece.id);
       if (error) throw error;
-    } else Object.assign(piece, values);
+    } else {
+      Object.assign(piece, values);
+      piece.in_stock = !piece.track_stock || Number(piece.stock_quantity || 0) > 0;
+    }
     toast(state.sample ? 'Sample stock updated.' : message, 'success');
     await refresh();
-  } catch (error) { toast(databaseError(error), 'error'); if (control) control.checked = !control.checked; }
-  finally { if (control) control.disabled = false; }
+  } catch (error) {
+    toast(databaseError(error), 'error');
+    if (control?.type === 'checkbox') control.checked = !control.checked;
+  } finally {
+    controls.forEach((node) => { node.disabled = false; });
+  }
 }
 const adjustQuantity = (piece, delta, control) => updatePieceFields(piece, { stock_quantity: Math.max(0, piece.stock_quantity + delta) }, 'Quantity updated.', control);
 const togglePieceVisible = (piece, control) => updatePieceFields(piece, { visible: control.checked }, control.checked ? 'Piece is visible on the website.' : 'Piece is hidden from the website.', control);
@@ -593,22 +623,27 @@ function renderAppointments() {
       const actions = el('div', { class: 'admin-actions' });
       STATUSES.filter((status) => status !== row.status).forEach((status) => actions.append(el('button', { class: 'admin-btn admin-btn-small', type: 'button', onclick: (event) => setAppointmentStatus(row, status, event.currentTarget) }, [status[0].toUpperCase() + status.slice(1)])));
       actions.append(el('button', { class: 'admin-btn admin-btn-small admin-btn-danger-quiet', type: 'button', onclick: () => deleteAppointment(row) }, ['Delete']));
+      const tel = String(row.phone || '').replace(/[^\d+]/g, '');
+      const hasDigits = /\d/.test(tel);
       body.append(el('tr', {}, [
         el('td', {}, [el('button', { class: 'admin-linklike', type: 'button', onclick: () => openAppointment(row) }, [row.name]), el('span', { class: 'admin-sub', text: 'Requested ' + ago(row.created_at) })]),
-        el('td', {}, [el('a', { class: 'admin-link', href: 'tel:' + String(row.phone || '').replace(/\s/g, ''), text: row.phone || '—' }), row.email ? el('span', { class: 'admin-sub admin-email', text: row.email }) : null]),
+        el('td', {}, [hasDigits ? el('a', { class: 'admin-link', href: 'tel:' + tel, text: row.phone }) : el('span', { text: row.phone || '—' }), row.email ? el('span', { class: 'admin-sub admin-email', text: row.email }) : null]),
         el('td', { text: row.purpose || '—' }), el('td', { class: 'admin-nowrap', text: formatDate(row.preferred_date) + (row.preferred_time ? ' · ' + row.preferred_time : '') }),
-        el('td', {}, [statusPill(row.status)]), el('td', {}, [actions])
+        el('td', {}, [statusPill(row.status, row.status, APPT_TONES[row.status])]), el('td', {}, [actions])
       ]));
     });
   }
   fill();
 }
 function openAppointment(row) {
-  openModal(row.name || 'Appointment request', el('dl', { class: 'admin-detail' }, [
+  const waDigits = String(row.phone || '').replace(/\D/g, '');
+  const actions = [el('button', { class: 'admin-btn', type: 'button', onclick: () => modal.close() }, ['Close'])];
+  if (waDigits) actions.push(el('a', { class: 'admin-btn admin-btn-primary', href: 'https://wa.me/' + waDigits, target: '_blank', rel: 'noopener' }, ['Message on WhatsApp']));
+  const modal = openModal(row.name || 'Appointment request', el('dl', { class: 'admin-detail' }, [
     detailRow('Phone', row.phone), detailRow('Email', row.email), detailRow('Purpose', row.purpose),
     detailRow('Preferred', formatDate(row.preferred_date) + ' at ' + (row.preferred_time || '—')), detailRow('Notes', row.notes),
     detailRow('Status', row.status), detailRow('Source', row.source), detailRow('Submitted', formatDateTime(row.created_at))
-  ]), el('div', { class: 'admin-modal-actions' }, [el('a', { class: 'admin-btn', href: 'https://wa.me/' + String(row.phone || '').replace(/\D/g, ''), target: '_blank', rel: 'noopener' }, ['Message on WhatsApp'])]));
+  ]), el('div', { class: 'admin-modal-actions' }, actions));
 }
 async function setAppointmentStatus(row, status, control) {
   await saving(control, 'Saving…', async () => {
@@ -632,11 +667,36 @@ function deleteAppointment(row) {
 }
 
 async function boot() {
-  if (sessionStorage.getItem(SAMPLE_KEY)) { await enterSampleMode(true); return; }
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const hasOAuthParam = (key) => searchParams.has(key) || hashParams.has(key);
+  const oauthCallback = ['code', 'access_token', 'error', 'error_description', 'error_code'].some(hasOAuthParam);
   try {
+    if (!oauthCallback && sessionStorage.getItem(SAMPLE_KEY)) {
+      await enterSampleMode(true);
+      return;
+    }
+    const init = await supabase.auth.initialize();
+    const urlError = init?.error?.message || searchParams.get('error_description') || hashParams.get('error_description') || searchParams.get('error') || hashParams.get('error');
+    if (['error', 'error_description', 'error_code'].some(hasOAuthParam)) {
+      const clean = new URL(window.location.href);
+      ['error', 'error_description', 'error_code'].forEach((k) => clean.searchParams.delete(k));
+      if (['error', 'error_description', 'error_code'].some((k) => hashParams.has(k))) clean.hash = '';
+      window.history.replaceState({}, document.title, clean.href);
+    }
+    if (urlError) {
+      showView('auth');
+      authMessage(urlError);
+      return;
+    }
     const { data, error } = await supabase.auth.getSession();
     if (error) throw error;
     if (data.session?.user) await afterAuth(data.session.user); else showView('auth');
-  } catch (error) { showView('auth'); authMessage('Could not check your session: ' + error.message + '. You can still explore the sample workspace.'); }
+  } catch (error) {
+    showView('auth');
+    authMessage('Could not check your session: ' + error.message + '. You can still explore the sample workspace.');
+  } finally {
+    booted = true;
+  }
 }
 boot();
