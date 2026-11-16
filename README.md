@@ -199,7 +199,7 @@ inventory/customer/post support, booking and review hardening, reviews). The
 admin allow-list holds exactly one address:
 
 ```
-d45671041@gmail.com
+aliflaammeemjeweller@gmail.com
 ```
 
 To rebuild a fresh project from scratch, run `supabase/schema.sql`, then the
@@ -240,7 +240,7 @@ The admin list is managed in the SQL editor:
 ```sql
 -- replace the current owner
 delete from public.admin_emails;
-insert into public.admin_emails(email) values ('d45671041@gmail.com');
+insert into public.admin_emails(email) values ('aliflaammeemjeweller@gmail.com');
 ```
 
 Open `admin.html` and sign in with that address — by Google sign-in (already

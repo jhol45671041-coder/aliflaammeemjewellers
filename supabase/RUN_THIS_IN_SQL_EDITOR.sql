@@ -3,14 +3,14 @@
 -- Dashboard -> SQL Editor -> New query -> paste this whole file -> Run.
 --
 -- STATUS: all three parts below are ALREADY APPLIED to project
--- wqxodgwgmbmssalapcjz (2026-11-09). Keep this file as the one-paste
+-- wqxodgwgmbmssalapcjz (updated 2026-11-16). Keep this file as the one-paste
 -- reinstall route for a brand-new project; running it again changes nothing
 -- because every statement is idempotent.
 --
 -- It contains, in order:
 --   1. migrations/202611060001_admin_and_booking_hardening.sql
 --   2. migrations/202611090001_reviews.sql
---   3. migrations/202611090002_admin_email.sql  (owner address)
+--   3. migrations/202611160001_change_admin_email.sql  (owner address)
 -- Each part runs in its own transaction and is safe to re-run.
 -- =============================================================================
 
@@ -376,13 +376,16 @@ commit;
 --   update public.alm_reviews set approved = true where id = '...';
 
 -- ============================ PART 3 ============================
--- Admin allow-list — owner account (2026-11-09)
+-- Admin allow-list — owner account (2026-11-16)
 -- Paste into: Supabase Dashboard -> project wqxodgwgmbmssalapcjz -> SQL Editor -> New query -> Run.
 begin;
 
 insert into public.admin_emails (email, note)
-values ('d45671041@gmail.com', 'Owner admin account')
+values ('aliflaammeemjeweller@gmail.com', 'Owner admin account')
 on conflict (email) do update set note = excluded.note;
+
+delete from public.admin_emails
+where lower(email) <> 'aliflaammeemjeweller@gmail.com';
 
 commit;
 

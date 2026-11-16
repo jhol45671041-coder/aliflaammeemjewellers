@@ -95,3 +95,11 @@ test('the site carries no invented testimonials', () => {
   assert.match(home, /Be the first to share your experience/);
   assert.match(home, /maps\.google\.com\/\?cid=9293768806817445409/);
 });
+
+test('admin email migration sets aliflaammeemjeweller@gmail.com as the sole owner', () => {
+  const adminChange = readFileSync(new URL('../supabase/migrations/202611160001_change_admin_email.sql', import.meta.url), 'utf8');
+  assert.match(adminChange, /insert into public\.admin_emails[\s\S]*'aliflaammeemjeweller@gmail\.com'/);
+  assert.match(adminChange, /delete from public\.admin_emails\s+where lower\(email\) <> 'aliflaammeemjeweller@gmail\.com'/);
+  assert.match(combined, /insert into public\.admin_emails[\s\S]*'aliflaammeemjeweller@gmail\.com'/);
+  assert.match(combined, /delete from public\.admin_emails\s+where lower\(email\) <> 'aliflaammeemjeweller@gmail\.com'/);
+});
