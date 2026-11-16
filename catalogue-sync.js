@@ -88,17 +88,58 @@ function patchPiecePage(node, item, maps) {
   const tags = node.querySelector('.piece-tags');
   if (tags) tags.innerHTML = tagsHtml(item);
   const enquire = node.querySelector('[data-enquire]');
-  if (enquire) { enquire.dataset.enquire = item.name; if (!item.inStock) enquire.textContent = 'Ask about availability'; }
+  if (enquire) {
+    enquire.dataset.enquire = item.name;
+    enquire.textContent = item.inStock ? 'Enquire on WhatsApp' : 'Ask about availability';
+  }
   const note = node.querySelector('.piece-note');
-  if (note && !item.inStock) note.textContent = 'This piece is currently unavailable. Ask us about the next arrival or a made-to-order commission.';
+  if (note) {
+    note.textContent = item.inStock
+      ? 'Ask us about availability, the exact weight, or to see the certificate before you decide.'
+      : 'This piece is currently unavailable. Ask us about the next arrival or a made-to-order commission.';
+  }
   const photo = node.querySelector('.piece-media');
   if (photo) {
+    let badgeNode = photo.querySelector(':scope > .badge');
+    if (item.badge) {
+      if (!badgeNode) { badgeNode = document.createElement('span'); photo.prepend(badgeNode); }
+      badgeNode.className = 'badge' + (['Bestseller', 'Signature'].includes(item.badge) ? ' gold' : '');
+      badgeNode.textContent = item.badge;
+    } else if (badgeNode) {
+      badgeNode.remove();
+    }
     // Keep a static multi-angle gallery; only the main visual follows the database.
     const main = photo.querySelector(':scope > .product-photo, :scope > .motif');
-    const gallery = photo.querySelector('.piece-gallery');
-    if (gallery && main) main.outerHTML = media(item, maps);
-    else photo.innerHTML = media(item, maps);
+    if (main) {
+      main.outerHTML = media(item, maps);
+    } else {
+      const holder = document.createElement('div');
+      holder.innerHTML = media(item, maps);
+      const nextMain = holder.firstElementChild;
+      if (nextMain) {
+        const gallery = photo.querySelector('.piece-gallery');
+        if (gallery) photo.insertBefore(nextMain, gallery);
+        else photo.append(nextMain);
+      }
+    }
   }
+}
+
+async function fetchPublicCatalogue() {
+  const pageSize = 1000;
+  const rows = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('catalogue')
+      .select('id,name,type,occasion,motif,badge,metals,tags,description,story,specs,photo,sort_order,visible,featured,in_stock,updated_at')
+      .order('sort_order')
+      .order('name')
+      .range(from, from + pageSize - 1);
+    if (error || !Array.isArray(data)) return { data: null, error: error || new Error('Invalid catalogue response') };
+    rows.push(...data);
+    if (data.length < pageSize) break;
+  }
+  return { data: rows, error: null };
 }
 
 function dynamicState(title, message) {
@@ -139,7 +180,7 @@ async function main() {
   const dynamicId = new URLSearchParams(location.search).get('id');
   const isDynamic = !!document.querySelector('[data-dynamic-piece]');
   if (isDynamic && !/^[a-z0-9][a-z0-9-]{0,79}$/.test(dynamicId || '')) { dynamicState('Piece not found.', 'Choose a piece from the collection to see its details.'); return; }
-  const { data, error } = await supabase.from('catalogue').select('id,name,type,occasion,motif,badge,metals,tags,description,story,specs,photo,sort_order,visible,featured,in_stock,updated_at').order('sort_order').order('name');
+  const { data, error } = await fetchPublicCatalogue();
   if (error || !Array.isArray(data)) {
     if (isDynamic) {
       const fallback = (maps.items || []).find((item) => item.id === dynamicId);

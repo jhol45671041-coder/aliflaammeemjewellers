@@ -103,3 +103,29 @@ test('admin email migration sets aliflaammeemjeweller@gmail.com as the sole owne
   assert.match(combined, /insert into public\.admin_emails[\s\S]*'aliflaammeemjeweller@gmail\.com'/);
   assert.match(combined, /delete from public\.admin_emails\s+where lower\(email\) <> 'aliflaammeemjeweller@gmail\.com'/);
 });
+
+test('all 37 build.py pieces and catalogue-photos storage are synced in SQL', () => {
+  const syncSql = readFileSync(new URL('../supabase/migrations/202611160002_sync_catalogue_and_storage.sql', import.meta.url), 'utf8');
+  const expectedIds = [...buildPy.matchAll(/dict\(id="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(expectedIds.length, 37);
+  for (const id of expectedIds) {
+    assert.ok(schema.includes("'" + id + "'"), 'schema.sql seeds ' + id);
+  }
+  for (const id of expectedIds.slice(0, 15)) {
+    assert.ok(syncSql.includes("'" + id + "'"), 'sync migration seeds ' + id);
+  }
+  for (const feat of ['meher', 'aab', 'zohra', 'sana', 'roshni', 'mahtab']) {
+    assert.ok(syncSql.includes("'" + feat + "'"), 'sync migration preserves featured flag for ' + feat);
+  }
+  for (const sql of [syncSql, schema]) {
+    assert.match(sql, /insert into storage\.buckets[\s\S]*'catalogue-photos'/);
+    assert.match(sql, /create policy catalogue_photos_public_read on storage\.objects/);
+    assert.match(sql, /create policy catalogue_photos_admin_insert on storage\.objects[\s\S]*public\.is_admin\(\)/);
+    assert.match(sql, /create policy catalogue_photos_admin_update on storage\.objects[\s\S]*public\.is_admin\(\)/);
+    assert.match(sql, /create policy catalogue_photos_admin_delete on storage\.objects[\s\S]*public\.is_admin\(\)/);
+  }
+  assert.ok(!buildPy.includes('static_only=True'), 'no product remains static-only without database management');
+  const syncBody = syncSql.split('begin;')[1].split('commit;')[0].trim();
+  assert.ok(combined.includes(syncBody), 'RUN_THIS_IN_SQL_EDITOR.sql includes sync_catalogue_and_storage');
+});
+

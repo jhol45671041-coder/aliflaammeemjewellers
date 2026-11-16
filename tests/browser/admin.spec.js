@@ -212,3 +212,214 @@ test('OAuth callback errors surface cleanly even when sample storage was active'
   await expect(page.locator('#authMessage')).toBeVisible();
   await expect(page.locator('#authMessage')).toContainText('Google sign-in was cancelled');
 });
+
+test('all 37 pieces appear with pagination in Admin Panel and clean desktop/mobile layouts', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', err => errors.push(err.message));
+  page.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()); });
+  await page.route('https://www.googletagmanager.com/**', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: '' }));
+
+  await enterSample(page);
+  await page.getByRole('button', { name: 'Stock & catalogue' }).click();
+  await expect(page.locator('#panelCatalogue')).toContainText('Showing 1–25 of 37 pieces');
+  await expect(page.locator('.admin-pagination-info')).toHaveText('Page 1 of 2');
+  await expect(page.locator('.admin-stock-table tbody')).toContainText('Yaqoot Ruby Halo Ring');
+  await expect(page.locator('.admin-stock-table tbody')).toContainText('Meher Solitaire Ring');
+
+  await page.getByRole('button', { name: 'Next', exact: true }).click();
+  await expect(page.locator('#panelCatalogue')).toContainText('Showing 26–37 of 37 pieces');
+  await expect(page.locator('.admin-pagination-info')).toHaveText('Page 2 of 2');
+  await expect(page.locator('.admin-stock-table tbody')).toContainText('Maahru Diamond Bangle');
+
+  await page.getByRole('button', { name: 'Previous', exact: true }).click();
+  await expect(page.locator('.admin-pagination-info')).toHaveText('Page 1 of 2');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const path of ['/collections.html', '/index.html', '/admin.html']) {
+    await page.goto(path);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+    expect(overflow).toBe(false);
+  }
+  expect(errors).toEqual([]);
+});
+
+test('non-admin account is blocked cleanly before opening the workspace', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('sb-wqxodgwgmbmssalapcjz-auth-token', JSON.stringify({
+      access_token: 'nonadmin-token', token_type: 'bearer', expires_in: 3600,
+      expires_at: Math.floor(Date.now() / 1000) + 3600, refresh_token: 'nonadmin-refresh',
+      user: { id: '00000000-0000-0000-0000-000000000002', aud: 'authenticated', role: 'authenticated', email: 'visitor@example.com' }
+    }));
+  });
+  await page.route('**/rest/v1/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/rpc/is_admin')) return route.fulfill({ status: 200, contentType: 'application/json', body: 'false' });
+    return route.fulfill({ status: 403, contentType: 'application/json', body: '{"message":"permission denied"}' });
+  });
+  await page.goto('/admin.html');
+  await expect(page.locator('#viewAuth')).toBeVisible();
+  await expect(page.locator('#viewApp')).toBeHidden();
+  await expect(page.locator('#authMessage')).toContainText('not on the admin list');
+});
+
+test('end-to-end Admin CRUD, Storage photo upload and public website sync work without duplicates', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', err => errors.push(err.message));
+  page.on('console', msg => { if (msg.type() === 'error') errors.push(msg.text()); });
+  await page.route('https://www.googletagmanager.com/**', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: '' }));
+
+  // Seed a stateful backend holding all 37 items from collections.html.
+  await page.goto('/collections.html');
+  const seeded = await page.evaluate(() => {
+    const data = JSON.parse(document.getElementById('catalogue-data').textContent);
+    return (data.items || []).map((item, idx) => ({
+      id: item.id, name: item.name, type: item.type, occasion: item.occasion, motif: item.motif,
+      badge: item.badge || null, metals: ['gold21'], tags: item.tags || [],
+      description: item.desc || '', story: item.story || '', specs: item.specs || [],
+      photo: item.photo || null, sort_order: idx, visible: true,
+      featured: ['meher', 'aab', 'zohra', 'sana', 'roshni', 'mahtab'].includes(item.id),
+      sku: null, track_stock: false, stock_quantity: 0, low_stock_threshold: 2,
+      in_stock: true, price: null, cost_price: null, weight_grams: null, location: null,
+      updated_at: '2026-11-16T00:00:00Z'
+    }));
+  });
+  const db = [...seeded];
+
+  await page.addInitScript(() => {
+    localStorage.setItem('sb-wqxodgwgmbmssalapcjz-auth-token', JSON.stringify({
+      access_token: 'admin-token', token_type: 'bearer', expires_in: 3600,
+      expires_at: Math.floor(Date.now() / 1000) + 3600, refresh_token: 'admin-refresh',
+      user: { id: 'ef5df982-8879-4646-9b8d-53bbee69b462', aud: 'authenticated', role: 'authenticated', email: 'aliflaammeemjeweller@gmail.com' }
+    }));
+  });
+
+  await page.route('**/*.supabase.co/**', async route => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    if (path.includes('/storage/v1/object/public/catalogue-photos/')) {
+      const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+      return route.fulfill({ status: 200, contentType: 'image/png', body: tinyPng });
+    }
+    if (path.includes('/storage/v1/object/catalogue-photos/')) {
+      const key = path.split('/catalogue-photos/')[1];
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ Key: 'catalogue-photos/' + key }) });
+    }
+    if (path.endsWith('/rpc/is_admin')) return route.fulfill({ status: 200, contentType: 'application/json', body: 'true' });
+    if (path.endsWith('/rpc/get_admin_pieces')) {
+      const sorted = [...db].sort((a, b) => (a.sort_order - b.sort_order) || a.name.localeCompare(b.name));
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(sorted) });
+    }
+    if (path.endsWith('/catalogue')) {
+      const visible = db.filter(row => row.visible !== false).sort((a, b) => (a.sort_order - b.sort_order) || a.name.localeCompare(b.name));
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(visible) });
+    }
+    if (path.endsWith('/pieces')) {
+      if (request.method() === 'POST') {
+        const body = JSON.parse(request.postData());
+        if (db.some(row => row.id === body.id)) {
+          return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ code: '23505', message: 'duplicate key' }) });
+        }
+        const saved = {
+          ...body,
+          in_stock: !body.track_stock || Number(body.stock_quantity || 0) > 0,
+          updated_at: new Date().toISOString()
+        };
+        db.push(saved);
+        return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify([saved]) });
+      }
+      if (request.method() === 'PATCH') {
+        const eq = url.searchParams.get('id') || '';
+        const targetId = eq.replace(/^eq\./, '');
+        const patch = JSON.parse(request.postData());
+        const target = db.find(row => row.id === targetId);
+        if (target) {
+          Object.assign(target, patch);
+          target.in_stock = !target.track_stock || Number(target.stock_quantity || 0) > 0;
+        }
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(target ? [target] : []) });
+      }
+      if (request.method() === 'DELETE') {
+        const eq = url.searchParams.get('id') || '';
+        const targetId = eq.replace(/^eq\./, '');
+        const idx = db.findIndex(row => row.id === targetId);
+        if (idx >= 0) db.splice(idx, 1);
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      }
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+  });
+
+  await page.goto('/admin.html');
+  await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Stock & catalogue' }).click();
+  await expect(page.locator('#panelCatalogue')).toContainText('Showing 1–25 of 37 pieces');
+
+  // 1. Add product + upload Storage image
+  await page.getByRole('button', { name: '+ Add stock' }).click();
+  await page.getByLabel('Name *').fill('Nawaab Gold Signet');
+  await page.getByLabel('Badge').fill('New');
+  await page.getByLabel('SKU', { exact: true }).fill('ALM-NAW-01');
+  await page.getByLabel('Selling price (PKR)').fill('310000');
+  const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  await page.getByLabel('Choose image file', { exact: true }).setInputFiles({ name: 'signet.png', mimeType: 'image/png', buffer: tinyPng });
+  await expect(page.locator('.admin-photo-tools [role="status"]')).toContainText('Uploaded');
+  await expect(page.getByLabel('Photograph', { exact: true })).toHaveValue(/\/storage\/v1\/object\/public\/catalogue-photos\/nawaab-gold-signet-/);
+  await page.getByRole('button', { name: 'Add piece', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  // Automatically focuses Page 2 where item #38 sits!
+  await expect(page.locator('.admin-pagination-info')).toHaveText('Page 2 of 2');
+  await expect(page.locator('.admin-stock-table tbody')).toContainText('Nawaab Gold Signet');
+  expect(db.filter(row => row.id === 'nawaab-gold-signet')).toHaveLength(1);
+
+  // 2. Verify visible on public collections + dynamic detail page + static badge preservation
+  await page.goto('/collections.html');
+  await expect(page.locator('#productsGrid .product-card')).toHaveCount(38);
+  await expect(page.locator('#productsGrid [data-piece="nawaab-gold-signet"]')).toContainText('Nawaab Gold Signet');
+  await page.goto('/piece.html?id=nawaab-gold-signet');
+  await expect(page.locator('.piece-name')).toHaveText('Nawaab Gold Signet');
+  await expect(page.locator('.piece-media .badge')).toHaveText('New');
+  await page.goto('/piece-meher.html');
+  await expect(page.locator('.piece-media .badge')).toHaveText('Bestseller');
+
+  // 3. Hide product in Admin Panel -> removes from public website while staying in Admin Panel
+  await page.goto('/admin.html');
+  await page.getByRole('button', { name: 'Stock & catalogue' }).click();
+  await page.getByLabel('Search stock').fill('Nawaab Gold Signet');
+  await page.getByLabel('Show Nawaab Gold Signet on website').uncheck();
+  await expect(page.locator('#toast')).toContainText('hidden');
+
+  await page.goto('/collections.html');
+  await expect(page.locator('#productsGrid .product-card')).toHaveCount(37);
+  await expect(page.locator('#productsGrid [data-piece="nawaab-gold-signet"]')).toHaveCount(0);
+  await page.goto('/piece.html?id=nawaab-gold-signet');
+  await expect(page.locator('#dynamicPieceState')).toContainText('unavailable');
+
+  // 4. Re-publish, edit, verify public update, then delete cleanly
+  await page.goto('/admin.html');
+  await page.getByRole('button', { name: 'Stock & catalogue' }).click();
+  await page.getByLabel('Search stock').fill('Nawaab Gold Signet');
+  await page.getByLabel('Show Nawaab Gold Signet on website').check();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.getByLabel('Name *').fill('Nawaab Heritage Signet');
+  await page.getByLabel('Badge').fill('Signature');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+
+  await page.goto('/piece.html?id=nawaab-gold-signet');
+  await expect(page.locator('.piece-name')).toHaveText('Nawaab Heritage Signet');
+  await expect(page.locator('.piece-media .badge')).toHaveText('Signature');
+
+  await page.goto('/admin.html');
+  await page.getByRole('button', { name: 'Stock & catalogue' }).click();
+  await page.getByLabel('Search stock').fill('Nawaab Heritage Signet');
+  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete piece', exact: true }).click();
+  await expect(page.locator('.admin-stock-table tbody')).toContainText('No pieces match');
+  expect(db).toHaveLength(37);
+
+  await page.goto('/collections.html');
+  await expect(page.locator('#productsGrid .product-card')).toHaveCount(37);
+  expect(errors).toEqual([]);
+});
+
