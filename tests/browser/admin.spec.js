@@ -122,13 +122,93 @@ test('a newly added piece has a working public detail page and availability note
   await page.goto('/piece.html?id=test-ring');
   await expect(page.locator('.piece-name')).toHaveText('Test Gold Ring');
   await expect(page.locator('.piece-note')).toContainText('currently unavailable');
-  await expect(page.locator('[data-enquire]')).toHaveText('Ask about availability');
+  await expect(page.locator('#dynamicPieceSection [data-enquire]')).toHaveText('Ask about availability');
 });
 
 test('an empty live catalogue removes stale generated cards', async ({ page }) => {
   await page.route('**/rest/v1/catalogue?**', route => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
   await page.goto('/collections.html');
-  await expect(page.locator('#productsGrid .product-card')).toHaveCount(0);
-  await expect(page.locator('#noResults')).toBeVisible();
+  const staticOnlyCount = await page.evaluate(() => {
+    const data = JSON.parse(document.getElementById('catalogue-data').textContent);
+    return (data.items || []).filter(item => item.staticOnly).length;
+  });
+  await expect(page.locator('#productsGrid .product-card')).toHaveCount(staticOnlyCount);
+  await expect(page.locator('#productsGrid [data-piece="meher"]')).toHaveCount(0);
+  await expect(page.locator('#productsGrid [data-piece="noor"]')).toHaveCount(0);
   await expect(page.locator('#spotlight')).toBeHidden();
+});
+
+test('modal Enter submission, tel/url styling, blank quantity validation and published post draft toggle work', async ({ page }) => {
+  await enterSample(page);
+
+  // Appointments status pills use semantic colors instead of neutral grey.
+  await page.getByRole('button', { name: 'Appointments', exact: true }).click();
+  const newPillBg = await page.locator('.admin-pill[data-status="new"]').first().evaluate(el => getComputedStyle(el).backgroundColor);
+  const confPillBg = await page.locator('.admin-pill[data-status="confirmed"]').first().evaluate(el => getComputedStyle(el).backgroundColor);
+  expect(newPillBg).not.toBe('rgb(245, 245, 247)');
+  expect(confPillBg).not.toBe('rgb(245, 245, 247)');
+
+  // Customer tel input matches email input styling and submits on Enter.
+  await page.getByRole('button', { name: 'Customers', exact: true }).click();
+  await page.getByRole('button', { name: '+ Add customer' }).click();
+  const inputStyles = await page.evaluate(() => {
+    const tel = document.querySelector('.admin-modal input[type="tel"]');
+    const email = document.querySelector('.admin-modal input[type="email"]');
+    return {
+      telPad: getComputedStyle(tel).paddingLeft,
+      emailPad: getComputedStyle(email).paddingLeft,
+      telRadius: getComputedStyle(tel).borderRadius,
+      emailRadius: getComputedStyle(email).borderRadius
+    };
+  });
+  expect(inputStyles.telPad).toBe(inputStyles.emailPad);
+  expect(inputStyles.telRadius).toBe(inputStyles.emailRadius);
+
+  // Dragging from inside a modal onto the backdrop does not close it.
+  const box = await page.getByLabel('Full name *').boundingBox();
+  await page.mouse.move(box.x + 20, box.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(5, 5);
+  await page.mouse.up();
+  await expect(page.getByRole('dialog')).toBeVisible();
+
+  await page.getByLabel('Full name *').fill('Enter Key Customer');
+  await page.getByLabel('Phone number').fill('+92 300 5550199');
+  await page.getByLabel('Phone number').press('Enter');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('#panelCustomers .admin-table tbody').first()).toContainText('Enter Key Customer');
+
+  // Blank stock quantity triggers validation; preview at 0 tracked stock uses danger tone.
+  await page.getByRole('button', { name: 'Stock & catalogue' }).click();
+  await page.getByRole('button', { name: '+ Add stock' }).click();
+  await page.getByLabel('Name *').fill('Blank Quantity Ring');
+  await page.getByLabel('Quantity on hand').fill('');
+  await page.getByLabel('Name *').press('Enter');
+  await expect(page.getByRole('alert')).toContainText('Quantity');
+  await page.getByLabel('Quantity on hand').fill('0');
+  await page.getByLabel('Track stock quantity for this piece').check();
+  await page.getByRole('button', { name: 'Add piece', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByLabel('Search stock').fill('Blank Quantity Ring');
+  await page.locator('.admin-stock-table tbody tr').first().getByRole('button', { name: 'Preview', exact: true }).click();
+  await expect(page.locator('.admin-modal .admin-pill')).toHaveAttribute('data-tone', 'danger');
+  await page.getByRole('button', { name: 'Close dialog' }).click();
+
+  // Published post editor offers Move to draft and url field inherits styling.
+  await page.getByRole('button', { name: 'Posts', exact: true }).click();
+  const pubRow = page.locator('.admin-posts-table tbody tr').filter({ hasText: 'A new chapter in gold' });
+  await pubRow.getByRole('button', { name: 'Edit', exact: true }).click();
+  const urlPad = await page.locator('.admin-modal input[type="url"]').evaluate(el => getComputedStyle(el).paddingLeft);
+  expect(urlPad).toBe('13px');
+  await page.getByRole('button', { name: 'Move to draft', exact: true }).click();
+  await expect(pubRow).toContainText('Draft');
+});
+
+test('OAuth callback errors surface cleanly even when sample storage was active', async ({ page }) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem('alm-admin-preview-v1', JSON.stringify({ version: 1, pieces: [], appointments: [], customers: [], profiles: [], posts: [] }));
+  });
+  await page.goto('/admin.html?error=access_denied&error_description=Google+sign-in+was+cancelled');
+  await expect(page.locator('#authMessage')).toBeVisible();
+  await expect(page.locator('#authMessage')).toContainText('Google sign-in was cancelled');
 });

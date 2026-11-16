@@ -58,12 +58,12 @@ export function formError(form, message) {
 
 export async function saving(button, label, action) {
   if (button.disabled) return;
-  const original = button.textContent;
+  const original = [...button.childNodes];
   button.disabled = true;
   button.textContent = label;
   try { return await action(); }
   catch (error) { toast('Something went wrong: ' + (error.message || 'please try again.'), 'error'); }
-  finally { button.disabled = false; button.textContent = original; }
+  finally { button.disabled = false; button.replaceChildren(...original); }
 }
 
 let toastTimer;
@@ -78,6 +78,10 @@ export function toast(message, kind = 'info') {
 }
 
 let closeModal = null;
+export function closeActiveModal() {
+  if (closeModal) closeModal();
+}
+
 export function openModal(title, body, footer) {
   if (closeModal) closeModal();
   const root = $('#modalRoot');
@@ -92,7 +96,15 @@ export function openModal(title, body, footer) {
     el('div', { class: 'admin-modal-body' }, [body]),
     footer ? el('div', { class: 'admin-modal-foot' }, [footer]) : null
   ]);
-  const backdrop = el('div', { class: 'admin-modal', onclick: (event) => { if (event.target === backdrop) close(); } }, [dialog]);
+  let pointerDownOnBackdrop = false;
+  const backdrop = el('div', {
+    class: 'admin-modal',
+    onpointerdown: (event) => { pointerDownOnBackdrop = event.target === backdrop; },
+    onclick: (event) => {
+      if (pointerDownOnBackdrop && event.target === backdrop) close();
+      pointerDownOnBackdrop = false;
+    }
+  }, [dialog]);
   function onKey(event) {
     if (event.key === 'Escape') { event.preventDefault(); close(); }
     if (event.key !== 'Tab') return;
@@ -197,6 +209,6 @@ export function errorCard(name, message, retry) {
   ]);
 }
 
-export function statusPill(status, label = status, tone = 'neutral') {
-  return el('span', { class: 'admin-pill', dataset: { status, tone }, text: label });
+export function statusPill(status, label = status, tone = '') {
+  return el('span', { class: 'admin-pill', dataset: tone ? { status, tone } : { status }, text: label });
 }

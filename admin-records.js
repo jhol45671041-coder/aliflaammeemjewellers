@@ -49,20 +49,21 @@ export function renderCustomers(ctx) {
     if (!rows.length) { body.append(emptyRow(5, state.custSearch ? 'No customers match your search.' : 'Your customer book is ready. Add your first customer.')); return; }
     rows.forEach((customer) => {
       const phone = String(customer.phone || '').replace(/[^\d+]/g, '');
+      const waDigits = phone.replace(/\D/g, '');
       body.append(el('tr', {}, [
         el('td', {}, [
           el('button', { class: 'admin-linklike', type: 'button', onclick: () => editCustomer(ctx, customer) }, [customer.full_name]),
           customer.address ? el('span', { class: 'admin-sub admin-clamp', text: customer.address }) : null
         ]),
         el('td', {}, [
-          customer.phone ? el('a', { class: 'admin-link', href: 'tel:' + phone, text: customer.phone }) : null,
+          waDigits ? el('a', { class: 'admin-link', href: 'tel:' + phone, text: customer.phone }) : (customer.phone ? el('span', { text: customer.phone }) : null),
           customer.email ? el('a', { class: 'admin-sub admin-email', href: 'mailto:' + encodeURIComponent(customer.email), text: customer.email }) : null
         ]),
         el('td', {}, [el('span', { class: 'admin-clamp', text: customer.notes || 'No notes yet' })]),
         el('td', { class: 'admin-nowrap', text: formatDate(customer.created_at) }),
         el('td', {}, [el('div', { class: 'admin-actions' }, [
           button('Edit', () => editCustomer(ctx, customer)),
-          customer.phone ? el('a', { class: 'admin-btn admin-btn-small', href: 'https://wa.me/' + phone.replace(/\D/g, ''), target: '_blank', rel: 'noopener' }, ['WhatsApp']) : null,
+          waDigits ? el('a', { class: 'admin-btn admin-btn-small', href: 'https://wa.me/' + waDigits, target: '_blank', rel: 'noopener' }, ['WhatsApp']) : null,
           button('Delete', () => deleteCustomer(ctx, customer), 'admin-btn-danger-quiet')
         ])])
       ]));
@@ -79,15 +80,16 @@ function editCustomer(ctx, customer) {
   const email = input(record.email, { type: 'email', maxLength: 254, autocomplete: 'email', placeholder: 'customer@example.com' });
   const address = textarea(record.address, 2, { maxLength: 1000, autocomplete: 'street-address', placeholder: 'City or full address (optional)' });
   const notes = textarea(record.notes, 4, { maxLength: 5000, placeholder: 'Preferences, ring size, occasions or follow-up notes…' });
-  const form = el('form', { class: 'admin-form', novalidate: true }, [
+  const form = el('form', { id: 'admin-customer-form', class: 'admin-form', novalidate: true }, [
     field('Full name *', name),
     el('div', { class: 'admin-form-two' }, [field('Phone number', phone), field('Email address', email)]),
     el('p', { class: 'admin-hint', text: 'Include a phone number or an email address. Only administrators can see these records.' }),
     field('Address', address), field('Private notes', notes)
   ]);
-  const saveButton = el('button', { class: 'admin-btn admin-btn-primary', type: 'button', onclick: () => form.requestSubmit() }, [customer ? 'Save changes' : 'Add customer']);
+  const saveButton = el('button', { class: 'admin-btn admin-btn-primary', type: 'submit', form: 'admin-customer-form' }, [customer ? 'Save changes' : 'Add customer']);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    formError(form, '');
     const result = validateCustomer({ full_name: name.value, phone: phone.value, email: email.value, address: address.value, notes: notes.value });
     if (result.error) { formError(form, result.error); return; }
     if (ctx.state.sample && ctx.state.customers.some((row) => row.id !== customer?.id && result.value.email && row.email?.toLowerCase() === result.value.email)) {
@@ -270,26 +272,38 @@ function editPost(ctx, post) {
   const excerpt = textarea(record.excerpt, 2, { maxLength: 320, placeholder: 'A short introduction for the journal (optional)' });
   const image = input(record.image_url, { type: 'url', placeholder: 'https://… or assets/products/meher.webp' });
   const body = textarea(record.body, 10, { maxLength: 30000, placeholder: 'Write your update here. Leave a blank line between paragraphs.' });
-  const form = el('form', { class: 'admin-form', novalidate: true }, [
+  const form = el('form', { id: 'admin-post-form', class: 'admin-form', novalidate: true }, [
     field('Title *', title), field('URL slug', slug, post ? 'The slug stays fixed so shared links keep working.' : 'Generated from the title. You can change it before saving.'),
     field('Category', category), field('Summary', excerpt, 'Up to 320 characters.'),
     field('Cover image', image, 'Optional HTTPS image URL or an existing assets/ path. Images are not uploaded by this panel.'),
     field('Post content', body, 'Plain text, with blank lines between paragraphs. Required to publish; optional for a draft.')
   ]);
-  const draftLabel = post?.status === 'published' ? 'Save changes' : 'Save draft';
-  const draft = el('button', { class: 'admin-btn', type: 'button', onclick: () => { publishRequested = false; form.requestSubmit(); } }, [draftLabel]);
-  const publish = el('button', { class: 'admin-btn admin-btn-primary', type: 'button' }, [post?.status === 'published' ? 'Save & keep published' : 'Publish post']);
-  let publishRequested = false, inFlight = false;
-  publish.addEventListener('click', () => { publishRequested = true; form.requestSubmit(); });
+  const isPublished = post?.status === 'published';
+  const draftLabel = isPublished ? 'Move to draft' : 'Save draft';
+  const publishLabel = isPublished ? 'Save & keep published' : 'Publish post';
+  let publishRequested = isPublished, inFlight = false;
+  const draft = el('button', {
+    class: 'admin-btn',
+    type: isPublished ? 'button' : 'submit',
+    form: isPublished ? null : 'admin-post-form',
+    onclick: () => { publishRequested = false; if (isPublished) form.requestSubmit(); }
+  }, [draftLabel]);
+  const publish = el('button', {
+    class: 'admin-btn admin-btn-primary',
+    type: isPublished ? 'submit' : 'button',
+    form: isPublished ? 'admin-post-form' : null,
+    onclick: () => { publishRequested = true; if (!isPublished) form.requestSubmit(); }
+  }, [publishLabel]);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     if (inFlight) return;
-    const publishing = publishRequested || post?.status === 'published';
-    publishRequested = false;
+    formError(form, '');
+    const publishing = publishRequested;
     const result = validatePost({ title: title.value, slug: slug.value, category: category.value, excerpt: excerpt.value, body: body.value, image_url: image.value }, publishing);
-    if (result.error) { formError(form, result.error); return; }
-    if (ctx.state.sample && ctx.state.posts.some((row) => row.id !== post?.id && row.slug === result.value.slug)) { formError(form, 'That slug is already used by another post.'); return; }
+    if (result.error) { publishRequested = isPublished; formError(form, result.error); return; }
+    if (ctx.state.sample && ctx.state.posts.some((row) => row.id !== post?.id && row.slug === result.value.slug)) { publishRequested = isPublished; formError(form, 'That slug is already used by another post.'); return; }
     inFlight = true;
+    if (publishing) draft.disabled = true; else publish.disabled = true;
     saving(publishing ? publish : draft, publishing ? 'Publishing…' : 'Saving…', async () => {
       const now = new Date().toISOString();
       const row = { ...result.value, status: publishing ? 'published' : 'draft', updated_at: now,
@@ -305,7 +319,7 @@ function editPost(ctx, post) {
       modal.close();
       toast(ctx.state.sample ? 'Post saved in this preview only.' : publishing ? 'Post saved and published to the journal.' : 'Draft saved. It is not public.', 'success');
       await ctx.refresh();
-    }).finally(() => { inFlight = false; draft.disabled = publish.disabled = false; });
+    }).finally(() => { inFlight = false; publishRequested = isPublished; draft.disabled = publish.disabled = false; });
   });
   const modal = openModal(post ? 'Edit post' : 'Write a new post', form,
     el('div', { class: 'admin-modal-actions' }, [
@@ -318,7 +332,7 @@ async function changePostStatus(ctx, post, control) {
     const now = new Date().toISOString();
     const row = { status: post.status === 'published' ? 'draft' : 'published', updated_at: now,
       published_at: post.status === 'published' ? null : now };
-    if (row.status === 'published' && !post.body.trim()) { toast('Open the post and write its content before publishing.', 'error'); return; }
+    if (row.status === 'published' && !(post.body || '').trim()) { toast('Open the post and write its content before publishing.', 'error'); return; }
     if (!ctx.state.sample) {
       const { error } = await ctx.supabase.from('posts').update(row).eq('id', post.id);
       if (error) { toast(databaseError(error), 'error'); return; }
